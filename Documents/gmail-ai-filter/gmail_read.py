@@ -1,24 +1,50 @@
-import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 import joblib
+# Gmail API 권한 범위
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-# 데이터 불러오기
-df = pd.read_csv("gmail_training_data.csv")
-df["text"] = df["subject"].fillna('') + " " + df["body"].fillna('')
-X_raw = df["text"]
-y = df["importance"]
 
-# 벡터라이저
-vectorizer = TfidfVectorizer(ngram_range=(1,2), token_pattern=r'(?u)\b\w+\b')
-X = vectorizer.fit_transform(X_raw)
+# 사전 학습된 모델과 벡터라이저 로드
+model = joblib.load("importance_model.pkl")
+vectorizer = joblib.load("vectorizer.pkl")
 
-# 모델 학습
-model = LogisticRegression(max_iter=1000, class_weight='balanced')
-model.fit(X, y)
+def classify_importance(subject, snippet):
+    text = subject + " " + snippet
+    vector = vectorizer.transform([text])
+    prediction = model.predict(vector)[0]
+    return int(prediction)
 
-# 저장
-joblib.dump(model, "importance_model.pkl")
-joblib.dump(vectorizer, "vectorizer.pkl")
 
-print("✅ 모델 학습 완료! importance_model.pkl, vectorizer.pkl 저장됨.")
+def main():
+    # OAuth 인증 시작
+    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+    creds = flow.run_local_server(port=0)
+
+    # Gmail API 클라이언트 생성
+    service = build('gmail', 'v1', credentials=creds)
+
+    # 최근 메일 5개 가져오기
+    results = service.users().messages().list(userId='me', maxResults=5).execute()
+    messages = results.get('messages', [])
+
+    for msg in messages:
+        msg_data = service.users().messages().get(userId='me', id=msg['id']).execute()
+
+        # 제목 찾기
+        headers = msg_data['payload'].get('headers', [])
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(제목 없음)')
+
+        # 본문 요약 가져오기
+        snippet = msg_data.get('snippet', '')
+
+        print(f"[제목] {subject}")
+        print(f"[내용 요약] {snippet}")
+        print("=" * 60)
+        # 중요도 분류
+        importance = classify_importance(subject, snippet)
+        print(f"[중요도] ⭐️ {importance}")
+
+
+if __name__ == '__main__':
+    main()
